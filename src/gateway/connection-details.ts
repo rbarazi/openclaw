@@ -1,6 +1,7 @@
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
 
 export type GatewayConnectionDetails = {
   url: string;
@@ -40,9 +41,18 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort =
     resolvers.resolveGatewayPort?.(config, process.env) ?? resolveGatewayPort(config);
-  const bindMode = config.gateway?.bind ?? "loopback";
+  const bindMode = process.env.OPENCLAW_CLI_BIND ?? config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
-  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
+  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const preferTailnet = bindMode === "tailnet" && !!tailnetIPv4;
+  const preferLan = bindMode === "lan";
+  const lanIPv4 = preferLan ? pickPrimaryLanIPv4() : undefined;
+  const localUrl =
+    preferTailnet && tailnetIPv4
+      ? `${scheme}://${tailnetIPv4}:${localPort}`
+      : preferLan && lanIPv4
+        ? `${scheme}://${lanIPv4}:${localPort}`
+        : `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
@@ -65,7 +75,11 @@ export function buildGatewayConnectionDetailsWithResolvers(
       ? "config gateway.remote.url"
       : remoteMisconfigured
         ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
+        : preferTailnet && tailnetIPv4
+          ? `local tailnet ${tailnetIPv4}`
+          : preferLan && lanIPv4
+            ? `local lan ${lanIPv4}`
+            : "local loopback";
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
