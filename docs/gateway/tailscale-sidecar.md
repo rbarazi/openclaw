@@ -30,15 +30,22 @@ runs with `--tailscale off` since the sidecar handles Tailscale integration.
                            |      ▼                   |
   Host :18789 ──────────> |  openclaw-gateway        |
   Host :18790 ──────────> |    (bind lan)            |
+                           |                          |
+                           |  openclaw-cli            |
+                           |    (OPENCLAW_CLI_BIND=   |
+                           |     loopback)            |
                            +--------------------------+
 ```
 
-- The `tailscale` container and `openclaw-gateway` share `localhost` via
-  `network_mode: "service:tailscale"`.
+- The `tailscale`, `openclaw-gateway`, and `openclaw-cli` containers all share
+  the same network namespace via `network_mode: "service:tailscale"`.
 - Tailscale Serve listens on port 443 on the Tailscale IP and proxies to
-  `http://localhost:18789` (the gateway).
+  `http://127.0.0.1:18789` (the gateway).
 - Host port mappings (18789, 18790) are on the `tailscale` container since it
   owns the network namespace.
+- The CLI uses `OPENCLAW_CLI_BIND=loopback` to connect via `127.0.0.1`
+  instead of the container's LAN IP. This is required for automatic device
+  pairing (the gateway auto-approves loopback connections).
 - Access is **private** — only devices connected to your Tailscale network can
   reach the dashboard via `https://<hostname>.ts.net/`.
 
@@ -97,7 +104,7 @@ docker compose exec tailscale tailscale status
     "${TS_CERT_DOMAIN}:443": {
       "Handlers": {
         "/": {
-          "Proxy": "http://localhost:18789"
+          "Proxy": "http://127.0.0.1:18789"
         }
       }
     }
@@ -107,6 +114,11 @@ docker compose exec tailscale tailscale status
 
 `${TS_CERT_DOMAIN}` is auto-expanded by the Tailscale container to the node's
 MagicDNS hostname. No `AllowFunnel` key — this is Serve-only.
+
+**Important:** Use `127.0.0.1` (not `localhost`) in the proxy URL. Inside the
+container, `localhost` may resolve to the IPv6 loopback `[::1]` first, but the
+Gateway only listens on IPv4. Using `localhost` causes intermittent
+`dial tcp [::1]:18789: connect: connection refused` proxy errors.
 
 ## Useful Commands
 
@@ -129,6 +141,63 @@ docker compose exec tailscale tailscale serve status
 # Health check
 docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
+
+## CLI Container Networking
+
+The CLI container **must** share the gateway's network namespace and override
+the bind mode to `loopback`. Without this, two things go wrong:
+
+1. The CLI resolves the gateway URL using the config's `gateway.bind` setting
+   (typically `lan`), which picks up the container's LAN IP instead of
+   `127.0.0.1`.
+2. The gateway requires **device pairing** for non-loopback connections.
+   Loopback connections are auto-approved; LAN connections require manual
+   approval.
+
+The `OPENCLAW_CLI_BIND` environment variable overrides the config's bind mode
+for the CLI's gateway URL resolution without affecting the gateway's listen
+address.
+
+```yaml
+# docker-compose.yml (CLI service)
+openclaw-cli:
+  image: ${OPENCLAW_IMAGE:-openclaw:local}
+  network_mode: "service:tailscale"
+  depends_on:
+    - tailscale
+  environment:
+    OPENCLAW_CLI_BIND: loopback   # connect to gateway via 127.0.0.1
+    OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+    # ...
+```
+
+This ensures:
+- CLI connects to `ws://127.0.0.1:18789` (loopback)
+- Gateway auto-approves the device pairing (silent, no manual step)
+- The gateway still listens on all interfaces via its own `--bind lan` flag
+
+## Data Persistence
+
+| Path (container) | Mounted from | Persists across restarts? |
+|---|---|---|
+| `/home/node/.openclaw/` | `${OPENCLAW_CONFIG_DIR}` (host bind mount) | Yes |
+| `/home/node/.openclaw/workspace/` | `${OPENCLAW_WORKSPACE_DIR}` (host bind mount) | Yes |
+| `/home/node/.config/op/` | `op-config` (named volume) | Yes (unless `docker compose down -v`) |
+| `/var/lib/tailscale/` | `ts-state` (named volume) | Yes (unless `docker compose down -v`) |
+| `/tmp/openclaw/` | Not mounted | No (lost on container restart) |
+
+Key files in the config directory:
+
+- `openclaw.json` — main config (auth, channels, agents, etc.)
+- `devices/paired.json` — paired device registry
+- `devices/pending.json` — pending pairing requests
+- `identity/device.json` — device Ed25519 keypair (shared by all CLI runs)
+- `agents/<agentId>/sessions/` — chat history and session data
+
+The config and workspace directories are bind-mounted from the host, so they
+survive image rebuilds, container recreation, and `docker compose down`.
+Named volumes (`ts-state`, `op-config`) survive restarts but are deleted by
+`docker compose down -v`.
 
 ## Gotchas and Troubleshooting
 
@@ -191,6 +260,53 @@ changes to the compose file (new services, updated commands), use:
 ```bash
 docker compose down && docker compose up -d openclaw-gateway
 ```
+
+### 7. IPv6 proxy errors: `dial tcp [::1]:18789: connection refused`
+
+The Tailscale Serve proxy resolves `localhost` to `[::1]` (IPv6) first, but
+the Gateway only listens on IPv4.
+
+**Fix:** Use `127.0.0.1` instead of `localhost` in `tailscale-serve.json`:
+
+```json
+"Proxy": "http://127.0.0.1:18789"
+```
+
+### 8. CLI fails with "pairing required" (1008)
+
+The CLI connects to the gateway but the connection is rejected because the
+device isn't paired. Two common causes:
+
+**a) CLI not using loopback.** If the CLI connects via a LAN IP, the gateway
+treats it as a remote connection and requires manual pairing. Check the error
+output for `Source: local lan` — it should say `Source: local loopback`.
+
+**Fix:** Ensure the CLI service has `OPENCLAW_CLI_BIND: loopback` in its
+environment and `network_mode: "service:tailscale"` in docker-compose.
+
+**b) Stale pending pairing request.** If a previous connection attempt created
+a pending request from a LAN IP (with `silent: false`), subsequent loopback
+connections reuse the stale request and don't auto-approve.
+
+**Fix:** Clear the pending requests and retry:
+
+```bash
+docker compose exec openclaw-gateway \
+  sh -c 'echo "{}" > /home/node/.openclaw/devices/pending.json'
+```
+
+### 9. macOS Docker Desktop and TUN devices
+
+On Docker Desktop for macOS, the `/dev/net/tun` device may not be available
+in the Linux VM. If the Tailscale container fails to start in kernel mode:
+
+**Fix:** Set `TS_USERSPACE=true` in your `.env` file to use userspace
+networking instead of kernel TUN.
+
+## Related Sidecars
+
+- [Browser Sidecar](browser-sidecar.md) — headless Chrome container for the
+  Gateway's browser agent features, using the same shared-network pattern
 
 ## Relation to Built-in Tailscale Support
 
