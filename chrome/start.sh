@@ -43,6 +43,6 @@ CHROME_PID=$!
 sleep 2
 
 x11vnc -display :99 -forever -shared -nopw -rfbport 5900 -q &
-websockify --web=/usr/share/novnc 6080 localhost:5900 &
+websockify --web=/usr/share/novnc 127.0.0.1:6080 localhost:5900 &
 
 wait $CHROME_PID
