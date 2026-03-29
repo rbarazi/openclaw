@@ -41,7 +41,7 @@ services:
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
       - op-config:/home/node/.config/op
       - gws-config:/home/node/.config/gws
-      - chrome-downloads:/home/node/Downloads
+      - chrome-downloads:/tmp/openclaw/downloads
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -86,14 +86,17 @@ services:
       HEADLESS: ${CHROME_HEADLESS:-true}
     volumes:
       - chrome-data:/home/chrome/data
-      - chrome-downloads:/home/chrome/Downloads
+      - chrome-downloads:/tmp/openclaw/downloads
     shm_size: "512m"
     init: true
     restart: unless-stopped
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
-    network_mode: "service:openclaw-gateway"
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+      - openclaw-gateway
     cap_drop:
       - NET_RAW
       - NET_ADMIN
@@ -117,8 +120,6 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
-    depends_on:
-      - openclaw-gateway
 
 volumes:
   ts-state:
