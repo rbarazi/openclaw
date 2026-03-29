@@ -258,8 +258,19 @@ RUN curl -sS https://downloads.1password.com/linux/keys/1password.asc | \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# Pre-create op config dir owned by node so mounted volumes inherit correct ownership
-RUN mkdir -p /home/node/.config/op && chown -R node:node /home/node/.config && chmod 700 /home/node/.config/op
+# Install Google Workspace CLI (gws)
+ARG GWS_VERSION=0.22.3
+RUN ARCH="$(uname -m)" && \
+    curl -fsSL "https://github.com/googleworkspace/cli/releases/download/v${GWS_VERSION}/google-workspace-cli-${ARCH}-unknown-linux-gnu.tar.gz" \
+      -o /tmp/gws.tar.gz && \
+    tar -xzf /tmp/gws.tar.gz -C /tmp && \
+    install -m 755 "/tmp/google-workspace-cli-${ARCH}-unknown-linux-gnu/gws" /usr/local/bin/gws && \
+    rm -rf /tmp/gws.tar.gz /tmp/google-workspace-cli-*
+
+# Pre-create config dirs owned by node so mounted volumes inherit correct ownership
+RUN mkdir -p /home/node/.config/op /home/node/.config/gws && \
+    chown -R node:node /home/node/.config && \
+    chmod 700 /home/node/.config/op /home/node/.config/gws
 
 # Allow non-root user to write temp files during runtime/tests.
 RUN chown -R node:node /app
