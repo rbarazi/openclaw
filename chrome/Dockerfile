@@ -6,6 +6,9 @@ RUN apt-get update && \
       fonts-liberation \
       fonts-noto-color-emoji \
       fonts-noto-cjk \
+      libegl1-mesa \
+      libgles2-mesa \
+      libgl1-mesa-dri \
       xvfb \
       x11vnc \
       novnc \
