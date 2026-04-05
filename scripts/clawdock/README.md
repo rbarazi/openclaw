@@ -117,11 +117,16 @@ clawdock-approve <request-id>
 
 ### Maintenance
 
-| Command            | Description                                           |
-| ------------------ | ----------------------------------------------------- |
-| `clawdock-update`  | Pull latest, rebuild image, and restart (one command) |
-| `clawdock-rebuild` | Rebuild the Docker image only                         |
-| `clawdock-clean`   | Remove all containers and volumes (destructive!)      |
+| Command                    | Description                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------ |
+| `clawdock-op-update`       | **Full update**: sync fork with upstream, rebase, rebuild all images, recreate with OP token |
+| `clawdock-update`          | Pull latest, rebuild image, and restart (one command)                          |
+| `clawdock-rebuild`         | Rebuild the gateway Docker image                                               |
+| `clawdock-rebuild-chrome`  | Rebuild the chrome sidecar image                                               |
+| `clawdock-rebuild-all`     | Rebuild all custom images (gateway + chrome)                                   |
+| `clawdock-op-recreate`     | Force recreate the gateway with `OP_SERVICE_ACCOUNT_TOKEN`                     |
+| `clawdock-op-recreate-all` | Force recreate all services with `OP_SERVICE_ACCOUNT_TOKEN`                    |
+| `clawdock-clean`           | Remove all containers and volumes (destructive!)                               |
 
 ### Utilities
 
@@ -234,6 +239,30 @@ OpenClaw loads env vars in this order (highest wins, never overrides existing):
 5. **Shell env import** — optional login-shell scrape (`OPENCLAW_LOAD_SHELL_ENV=1`)
 
 ## Common Workflows
+
+### Full Stack Update (Fork + OP Secrets)
+
+When running a fork with upstream tracking, Tailscale sidecar, chrome sidecar, and 1Password secrets:
+
+```bash
+export OP_SERVICE_ACCOUNT_TOKEN=...
+clawdock-op-update
+```
+
+This will:
+
+1. Fetch upstream `main` and fast-forward your fork
+2. Rebase your current feature branch onto the updated `main`
+3. Rebuild the gateway image (no cache) and chrome sidecar
+4. Pull the latest Tailscale image
+5. Force-recreate all containers with 1Password secrets injected
+
+For partial updates:
+
+```bash
+clawdock-rebuild-all        # Rebuild images only
+clawdock-op-recreate-all    # Recreate containers only (with OP token)
+```
 
 ### Update OpenClaw
 
