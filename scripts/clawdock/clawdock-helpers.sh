@@ -43,6 +43,18 @@ CLAWDOCK_COMMON_PATHS=(
   "${HOME}/src/openclaw"
 )
 
+_clawdock_find_nearby_dir() {
+  local dir="$PWD"
+  while [[ -n "$dir" && "$dir" != "/" ]]; do
+    if [[ -f "${dir}/docker-compose.yml" ]]; then
+      printf "%s" "$dir"
+      return 0
+    fi
+    dir="${dir:h}"
+  done
+  return 1
+}
+
 _clawdock_filter_warnings() {
   grep -v "^WARN\|^time="
 }
@@ -116,6 +128,14 @@ _clawdock_ensure_dir() {
     return 0
   fi
 
+  # Prefer the current checkout (or any parent directory) when available.
+  local nearby_dir
+  nearby_dir=$(_clawdock_find_nearby_dir)
+  if [[ -n "$nearby_dir" ]]; then
+    CLAWDOCK_DIR="$nearby_dir"
+    return 0
+  fi
+
   # Auto-detect from common paths
   local candidate found_path="" response
   for candidate in "${CLAWDOCK_COMMON_PATHS[@]}"; do
@@ -176,6 +196,24 @@ _clawdock_compose() {
   command docker compose "${compose_args[@]}" "$@"
 }
 
+_clawdock_require_op() {
+  if [[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+    echo "❌ Error: OP_SERVICE_ACCOUNT_TOKEN is not set"
+    echo "   Export it first, then rerun the command."
+    return 1
+  fi
+}
+
+_clawdock_compose_with_op() {
+  _clawdock_require_op || return 1
+  _clawdock_ensure_dir || return 1
+  local compose_args=(-f "${CLAWDOCK_DIR}/docker-compose.yml")
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.extra.yml" ]]; then
+    compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.extra.yml")
+  fi
+  OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN}" command docker compose "${compose_args[@]}" "$@"
+}
+
 _clawdock_read_env_token() {
   _clawdock_ensure_dir || return 1
   if [[ ! -f "${CLAWDOCK_DIR}/.env" ]]; then
@@ -200,6 +238,10 @@ clawdock-stop() {
 
 clawdock-restart() {
   _clawdock_compose restart openclaw-gateway
+}
+
+clawdock-op-restart() {
+  _clawdock_compose_with_op restart openclaw-gateway
 }
 
 clawdock-logs() {
@@ -290,7 +332,26 @@ clawdock-cli() {
   _clawdock_compose run --rm openclaw-cli "$@"
 }
 
+clawdock-op-cli() {
+  _clawdock_compose_with_op run --rm -e OP_SERVICE_ACCOUNT_TOKEN openclaw-cli "$@"
+}
+
+clawdock-op-config() {
+  clawdock-op-cli config "$@"
+}
+
 # Maintenance
+
+_clawdock_build_gateway() {
+  _clawdock_ensure_dir || return 1
+  local dockerfile="${CLAWDOCK_DIR}/Dockerfile"
+  if [[ ! -f "$dockerfile" ]]; then
+    echo -e "${_CLR_RED}❌ Dockerfile not found at ${dockerfile}${_CLR_RESET}"
+    return 1
+  fi
+  docker build -t openclaw:local -f "$dockerfile" "$CLAWDOCK_DIR" "$@"
+}
+
 clawdock-update() {
   _clawdock_ensure_dir || return 1
 
@@ -302,7 +363,7 @@ clawdock-update() {
 
   echo ""
   echo "🔨 Rebuilding Docker image (this may take a few minutes)..."
-  _clawdock_compose build openclaw-gateway || { echo "❌ Build failed"; return 1; }
+  _clawdock_build_gateway || { echo "❌ Build failed"; return 1; }
 
   echo ""
   echo "♻️  Recreating container with new image..."
@@ -318,11 +379,99 @@ clawdock-update() {
 }
 
 clawdock-rebuild() {
-  _clawdock_compose build openclaw-gateway
+  _clawdock_build_gateway
+}
+
+clawdock-rebuild-chrome() {
+  _clawdock_compose build chrome
+}
+
+clawdock-rebuild-all() {
+  echo -e "${_CLR_BOLD}${_CLR_CYAN}🔨 Rebuilding all custom images...${_CLR_RESET}"
+  echo ""
+  echo -e "${_CLR_YELLOW}[1/2]${_CLR_RESET} Building openclaw:local (gateway)..."
+  _clawdock_build_gateway || { echo -e "${_CLR_RED}❌ Gateway build failed${_CLR_RESET}"; return 1; }
+  echo ""
+  echo -e "${_CLR_YELLOW}[2/2]${_CLR_RESET} Building chrome sidecar..."
+  _clawdock_compose build chrome || { echo -e "${_CLR_RED}❌ Chrome build failed${_CLR_RESET}"; return 1; }
+  echo ""
+  echo -e "${_CLR_GREEN}✅ All images rebuilt${_CLR_RESET}"
 }
 
 clawdock-clean() {
   _clawdock_compose down -v --remove-orphans
+}
+
+clawdock-op-recreate() {
+  _clawdock_compose_with_op up -d --force-recreate openclaw-gateway
+}
+
+clawdock-op-recreate-all() {
+  _clawdock_compose_with_op up -d --force-recreate openclaw-gateway chrome
+}
+
+# Full update: sync fork, rebuild images, recreate containers with OP secrets
+clawdock-op-update() {
+  _clawdock_require_op || return 1
+  _clawdock_ensure_dir || return 1
+
+  echo -e "${_CLR_BOLD}${_CLR_CYAN}🦞 Full stack update${_CLR_RESET}"
+  echo ""
+
+  # Step 1: Sync fork with upstream
+  echo -e "${_CLR_YELLOW}[1/4]${_CLR_RESET} Syncing fork with upstream..."
+  (
+    cd "$CLAWDOCK_DIR"
+    if git remote get-url upstream >/dev/null 2>&1; then
+      git fetch upstream main && git update-ref refs/heads/main upstream/main
+      echo -e "  ${_CLR_GREEN}✅ Local main synced with upstream${_CLR_RESET}"
+      if git push origin main 2>/dev/null; then
+        echo -e "  ${_CLR_GREEN}✅ Pushed to origin/main${_CLR_RESET}"
+      else
+        echo -e "  ${_CLR_YELLOW}⚠️  Could not push to origin (auth may be needed)${_CLR_RESET}"
+      fi
+      # Rebase current branch if it's not main
+      local current_branch
+      current_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+      if [[ -n "$current_branch" && "$current_branch" != "main" ]]; then
+        echo -e "  Rebasing ${_CLR_CYAN}${current_branch}${_CLR_RESET} onto main..."
+        if git rebase main; then
+          echo -e "  ${_CLR_GREEN}✅ Rebased ${current_branch} onto main${_CLR_RESET}"
+        else
+          echo -e "  ${_CLR_RED}❌ Rebase conflict — aborting rebase${_CLR_RESET}"
+          git rebase --abort
+          echo -e "  ${_CLR_YELLOW}⚠️  Building from current branch as-is${_CLR_RESET}"
+        fi
+      fi
+    else
+      echo -e "  ${_CLR_DIM}No upstream remote; pulling instead...${_CLR_RESET}"
+      git pull || echo -e "  ${_CLR_YELLOW}⚠️  git pull failed${_CLR_RESET}"
+    fi
+  )
+  echo ""
+
+  # Step 2: Rebuild images
+  echo -e "${_CLR_YELLOW}[2/4]${_CLR_RESET} Rebuilding images..."
+  echo -e "  Building openclaw:local (gateway)..."
+  _clawdock_build_gateway --no-cache || { echo -e "${_CLR_RED}❌ Gateway build failed${_CLR_RESET}"; return 1; }
+  echo -e "  Building chrome sidecar..."
+  _clawdock_compose build chrome || { echo -e "${_CLR_RED}❌ Chrome build failed${_CLR_RESET}"; return 1; }
+  echo -e "  ${_CLR_GREEN}✅ Images rebuilt${_CLR_RESET}"
+  echo ""
+
+  # Step 3: Pull latest tailscale image
+  echo -e "${_CLR_YELLOW}[3/4]${_CLR_RESET} Pulling latest tailscale image..."
+  docker pull tailscale/tailscale:latest
+  echo ""
+
+  # Step 4: Recreate all containers
+  echo -e "${_CLR_YELLOW}[4/4]${_CLR_RESET} Recreating containers..."
+  _clawdock_compose_with_op up -d --force-recreate
+  echo ""
+
+  echo -e "${_CLR_BOLD}${_CLR_GREEN}✅ Full stack update complete${_CLR_RESET}"
+  echo -e "  Run $(_cmd clawdock-logs) to watch startup"
+  echo -e "  Run $(_cmd clawdock-status) to check health"
 }
 
 # Health check
@@ -473,6 +622,7 @@ clawdock-help() {
   echo -e "  $(_cmd clawdock-start)       ${_CLR_DIM}Start the gateway${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-stop)        ${_CLR_DIM}Stop the gateway${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-restart)     ${_CLR_DIM}Restart the gateway${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-restart)  ${_CLR_DIM}Restart with OP_SERVICE_ACCOUNT_TOKEN${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-status)      ${_CLR_DIM}Check container status${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-logs)        ${_CLR_DIM}View live logs (follows)${_CLR_RESET}"
   echo ""
@@ -480,6 +630,8 @@ clawdock-help() {
   echo -e "${_CLR_BOLD}${_CLR_MAGENTA}🐚 Container Access${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-shell)       ${_CLR_DIM}Shell into container (openclaw alias ready)${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-cli)         ${_CLR_DIM}Run CLI commands (e.g., clawdock-cli status)${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-cli)      ${_CLR_DIM}Run CLI commands with OP_SERVICE_ACCOUNT_TOKEN${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-config)   ${_CLR_DIM}Run config commands with OP_SERVICE_ACCOUNT_TOKEN${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-exec) ${_CLR_CYAN}<cmd>${_CLR_RESET}  ${_CLR_DIM}Execute command in gateway container${_CLR_RESET}"
   echo ""
 
@@ -494,9 +646,14 @@ clawdock-help() {
   echo ""
 
   echo -e "${_CLR_BOLD}${_CLR_MAGENTA}🔧 Maintenance${_CLR_RESET}"
-  echo -e "  $(_cmd clawdock-update)      ${_CLR_DIM}Pull, rebuild, and restart ${_CLR_CYAN}(one-command update)${_CLR_RESET}"
-  echo -e "  $(_cmd clawdock-rebuild)     ${_CLR_DIM}Rebuild Docker image only${_CLR_RESET}"
-  echo -e "  $(_cmd clawdock-clean)       ${_CLR_RED}⚠️  Remove containers & volumes (nuclear)${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-update)       ${_CLR_DIM}${_CLR_GREEN}Full update: sync fork + rebuild + recreate${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-update)          ${_CLR_DIM}Pull, rebuild, and restart${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-rebuild)         ${_CLR_DIM}Rebuild gateway image${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-rebuild-chrome)  ${_CLR_DIM}Rebuild chrome sidecar image${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-rebuild-all)     ${_CLR_DIM}Rebuild all custom images${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-recreate)     ${_CLR_DIM}Force recreate gateway with OP token${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-recreate-all) ${_CLR_DIM}Force recreate all services with OP token${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-clean)           ${_CLR_RED}⚠️  Remove containers & volumes (nuclear)${_CLR_RESET}"
   echo ""
 
   echo -e "${_CLR_BOLD}${_CLR_MAGENTA}🛠️  Utilities${_CLR_RESET}"
