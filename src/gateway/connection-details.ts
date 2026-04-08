@@ -1,7 +1,7 @@
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
-import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "./net.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isSecureWebSocketUrl } from "./net.js";
 
 export type GatewayConnectionDetails = {
   url: string;
@@ -16,11 +16,6 @@ type GatewayConnectionDetailResolvers = {
   resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
-
-function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
@@ -43,26 +38,13 @@ export function buildGatewayConnectionDetailsWithResolvers(
     resolvers.resolveGatewayPort?.(config, process.env) ?? resolveGatewayPort(config);
   const bindMode = process.env.OPENCLAW_CLI_BIND ?? config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  const preferTailnet = bindMode === "tailnet" && !!tailnetIPv4;
-  const preferLan = bindMode === "lan";
-  const lanIPv4 = preferLan ? pickPrimaryLanIPv4() : undefined;
-  const localUrl =
-    preferTailnet && tailnetIPv4
-      ? `${scheme}://${tailnetIPv4}:${localPort}`
-      : preferLan && lanIPv4
-        ? `${scheme}://${lanIPv4}:${localPort}`
-        : `${scheme}://127.0.0.1:${localPort}`;
-  const cliUrlOverride =
-    typeof options.url === "string" && options.url.trim().length > 0
-      ? options.url.trim()
-      : undefined;
+  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
+  const cliUrlOverride = normalizeOptionalString(options.url);
   const envUrlOverride = cliUrlOverride
     ? undefined
-    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
+    : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
-  const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
+  const remoteUrl = normalizeOptionalString(remote?.url);
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const urlSourceHint =
     options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);

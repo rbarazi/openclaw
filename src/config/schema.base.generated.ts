@@ -2807,6 +2807,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           supportsStrictMode: {
                             type: "boolean",
                           },
+                          requiresStringContent: {
+                            type: "boolean",
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
@@ -3053,6 +3056,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              musicGenerationModel: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      primary: {
+                        type: "string",
+                        title: "Music Generation Model",
+                        description:
+                          "Optional music-generation model (provider/model) used by the shared music generation capability.",
+                      },
+                      fallbacks: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Music Generation Model Fallbacks",
+                        description: "Ordered fallback music-generation models (provider/model).",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              mediaGenerationAutoProviderFallback: {
+                type: "boolean",
+                title: "Media Generation Auto Provider Fallback",
+                description:
+                  "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -3142,8 +3178,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
               },
+              systemPromptOverride: {
+                type: "string",
+              },
               skipBootstrap: {
                 type: "boolean",
+              },
+              contextInjection: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "always",
+                  },
+                  {
+                    type: "string",
+                    const: "continuation-skip",
+                  },
+                ],
+                title: "Context Injection",
+                description:
+                  'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
               },
               bootstrapMaxChars: {
                 type: "integer",
@@ -3414,6 +3468,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
+                    imagePathScope: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "temp",
+                        },
+                        {
+                          type: "string",
+                          const: "workspace",
+                        },
+                      ],
+                    },
                     serialize: {
                       type: "boolean",
                     },
@@ -3616,7 +3682,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Memory Search Provider",
                     description:
-                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
                   },
                   remote: {
                     type: "object",
@@ -3771,7 +3837,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     maximum: 9007199254740991,
                     title: "Memory Search Output Dimensionality",
                     description:
-                      "Gemini embedding-2 only: chooses the output vector size for memory embeddings. Use 768, 1536, or 3072 (default), and expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+                      "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
                   },
                   local: {
                     type: "object",
@@ -4173,6 +4239,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Compaction Mode",
                     description:
                       'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+                  },
+                  provider: {
+                    type: "string",
+                    title: "Compaction Provider",
+                    description:
+                      "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
                   },
                   reserveTokens: {
                     type: "integer",
@@ -4666,6 +4738,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   prompt: {
                     type: "string",
+                  },
+                  includeSystemPromptSection: {
+                    type: "boolean",
+                    title: "Heartbeat Include System Prompt Section",
+                    description:
+                      "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
                   },
                   ackMaxChars: {
                     type: "integer",
@@ -5322,6 +5400,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 agentDir: {
                   type: "string",
                 },
+                systemPromptOverride: {
+                  type: "string",
+                },
                 model: {
                   anyOf: [
                     {
@@ -5880,6 +5961,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     prompt: {
                       type: "string",
+                    },
+                    includeSystemPromptSection: {
+                      type: "boolean",
+                      title: "Heartbeat Include System Prompt Section",
+                      description:
+                        "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
                     },
                     ackMaxChars: {
                       type: "integer",
@@ -17093,7 +17180,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Enable Structured Plan Tool",
                 description:
-                  "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+                  "Enable or disable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. OpenAI and OpenAI Codex runs auto-enable it when this flag is unset; set false to disable that auto-enable.",
               },
             },
             additionalProperties: false,
@@ -20171,7 +20258,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           provider: {
             type: "string",
             title: "Talk Active Provider",
-            description: 'Active Talk provider id (for example "elevenlabs").',
+            description: 'Active Talk provider id (for example "acme-speech").',
           },
           providers: {
             type: "object",
@@ -23125,6 +23212,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
       tags: ["performance", "media", "tools"],
     },
+    "tools.media.asyncCompletion.directSend": {
+      label: "Async Media Completion Direct Send",
+      help: "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+      tags: ["storage", "media", "tools"],
+    },
     "tools.media.audio.enabled": {
       label: "Enable Audio Understanding",
       help: "Enable audio understanding so voice notes or audio clips can be transcribed/summarized for agent context. Disable when audio ingestion is outside policy or unnecessary for your workflows.",
@@ -23464,7 +23556,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.experimental.planTool": {
       label: "Enable Structured Plan Tool",
-      help: "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+      help: "Enable or disable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. OpenAI and OpenAI Codex runs auto-enable it when this flag is unset; set false to disable that auto-enable.",
       tags: ["security", "tools", "advanced"],
     },
     "tools.elevated": {
@@ -24106,6 +24198,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
       tags: ["advanced"],
     },
+    "agents.defaults.contextInjection": {
+      label: "Context Injection",
+      help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+      tags: ["advanced"],
+    },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
       help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
@@ -24208,7 +24305,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.provider": {
       label: "Memory Search Provider",
-      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.remote.baseUrl": {
@@ -24259,7 +24356,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.outputDimensionality": {
       label: "Memory Search Output Dimensionality",
-      help: "Gemini embedding-2 only: chooses the output vector size for memory embeddings. Use 768, 1536, or 3072 (default), and expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+      help: "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.fallback": {
@@ -24933,6 +25030,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Ordered fallback video-generation models (provider/model).",
       tags: ["reliability", "media"],
     },
+    "agents.defaults.musicGenerationModel.primary": {
+      label: "Music Generation Model",
+      help: "Optional music-generation model (provider/model) used by the shared music generation capability.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.musicGenerationModel.fallbacks": {
+      label: "Music Generation Model Fallbacks",
+      help: "Ordered fallback music-generation models (provider/model).",
+      tags: ["reliability"],
+    },
+    "agents.defaults.mediaGenerationAutoProviderFallback": {
+      label: "Media Generation Auto Provider Fallback",
+      help: "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+      tags: ["reliability"],
+    },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",
       help: "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
@@ -24986,6 +25098,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.compaction.mode": {
       label: "Compaction Mode",
       help: 'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.compaction.provider": {
+      label: "Compaction Provider",
+      help: "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.reserveTokens": {
@@ -25107,6 +25224,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Embedded Pi Project Settings Policy",
       help: 'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
       tags: ["access"],
+    },
+    "agents.defaults.heartbeat.includeSystemPromptSection": {
+      label: "Heartbeat Include System Prompt Section",
+      help: "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
+      tags: ["automation"],
+    },
+    "agents.list.*.heartbeat.includeSystemPromptSection": {
+      label: "Heartbeat Include System Prompt Section",
+      help: "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
+      tags: ["automation"],
     },
     "agents.defaults.heartbeat.directPolicy": {
       label: "Heartbeat Direct Policy",
@@ -26111,7 +26238,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "talk.provider": {
       label: "Talk Active Provider",
-      help: 'Active Talk provider id (for example "elevenlabs").',
+      help: 'Active Talk provider id (for example "acme-speech").',
       tags: ["media"],
     },
     "talk.providers": {
@@ -26777,6 +26904,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.4",
+  version: "2026.4.9",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };
