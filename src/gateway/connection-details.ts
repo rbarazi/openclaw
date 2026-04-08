@@ -36,7 +36,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort =
     resolvers.resolveGatewayPort?.(config, process.env) ?? resolveGatewayPort(config);
-  const bindMode = config.gateway?.bind ?? "loopback";
+  const bindMode = process.env.OPENCLAW_CLI_BIND ?? config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
@@ -57,7 +57,11 @@ export function buildGatewayConnectionDetailsWithResolvers(
       ? "config gateway.remote.url"
       : remoteMisconfigured
         ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
+        : preferTailnet && tailnetIPv4
+          ? `local tailnet ${tailnetIPv4}`
+          : preferLan && lanIPv4
+            ? `local lan ${lanIPv4}`
+            : "local loopback";
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."

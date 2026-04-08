@@ -1,6 +1,31 @@
 services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: openclaw-gateway
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/tailscale-serve.json
+      TS_USERSPACE: ${TS_USERSPACE:-false}
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./tailscale-serve.json:/config/tailscale-serve.json:ro
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "${NOVNC_PORT:-6080}:6080"
+    restart: unless-stopped
+
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -9,10 +34,14 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - op-config:/home/node/.config/op
+      - gws-config:/home/node/.config/gws
+      - chrome-downloads:/tmp/openclaw/downloads
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -21,9 +50,6 @@ services:
       # - /var/run/docker.sock:/var/run/docker.sock
     # group_add:
     #   - "${DOCKER_GID:-999}"
-    ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
     command:
@@ -35,6 +61,8 @@ services:
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
         "18789",
+        "--tailscale",
+        "off",
       ]
     healthcheck:
       test:
@@ -49,9 +77,26 @@ services:
       retries: 5
       start_period: 20s
 
+  chrome:
+    build: ./chrome
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+    environment:
+      HEADLESS: ${CHROME_HEADLESS:-true}
+    volumes:
+      - chrome-data:/home/chrome/data
+      - chrome-downloads:/tmp/openclaw/downloads
+    shm_size: "512m"
+    init: true
+    restart: unless-stopped
+
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
-    network_mode: "service:openclaw-gateway"
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+      - openclaw-gateway
     cap_drop:
       - NET_RAW
       - NET_ADMIN
@@ -62,6 +107,7 @@ services:
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_CLI_BIND: loopback
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
@@ -74,5 +120,10 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
-    depends_on:
-      - openclaw-gateway
+
+volumes:
+  ts-state:
+  op-config:
+  gws-config:
+  chrome-downloads:
+  chrome-data:
