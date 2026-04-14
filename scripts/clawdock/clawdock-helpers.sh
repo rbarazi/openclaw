@@ -345,11 +345,20 @@ clawdock-op-config() {
 _clawdock_build_gateway() {
   _clawdock_ensure_dir || return 1
   local dockerfile="${CLAWDOCK_DIR}/Dockerfile"
+  local dockerfile_extra="${CLAWDOCK_DIR}/Dockerfile.extra"
   if [[ ! -f "$dockerfile" ]]; then
     echo -e "${_CLR_RED}❌ Dockerfile not found at ${dockerfile}${_CLR_RESET}"
     return 1
   fi
-  docker build -t openclaw:local -f "$dockerfile" "$CLAWDOCK_DIR" "$@"
+  # Two-step build: upstream base image → extra layer (1Password, GWS, entrypoint)
+  if [[ -f "$dockerfile_extra" ]]; then
+    echo -e "  ${_CLR_DIM}Step 1: Building upstream base image...${_CLR_RESET}"
+    docker build -t openclaw:upstream -f "$dockerfile" "$CLAWDOCK_DIR" "$@" || return 1
+    echo -e "  ${_CLR_DIM}Step 2: Applying extra layer (1Password, GWS, entrypoint)...${_CLR_RESET}"
+    docker build -t openclaw:local -f "$dockerfile_extra" "$CLAWDOCK_DIR" || return 1
+  else
+    docker build -t openclaw:local -f "$dockerfile" "$CLAWDOCK_DIR" "$@"
+  fi
 }
 
 clawdock-update() {
