@@ -1,0 +1,92 @@
+# Tailscale sidecar overlay for OpenClaw Docker setup.
+#
+# ClawDock auto-loads this file when present (no -f flag needed).
+# All services share the Tailscale network namespace so the gateway,
+# chrome sidecar, and CLI are reachable via the Tailscale hostname.
+#
+# Requires:
+#   - tailscale-serve.json (bind-mounted into the Tailscale container)
+#   - chrome/ directory with Dockerfile and start.sh
+#   - TS_AUTHKEY in .env or environment
+#
+# Ports are published on the Tailscale container (network owner):
+#   18789  → gateway
+#   18790  → bridge
+#   6080   → noVNC (chrome sidecar)
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: openclaw-gateway
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/tailscale-serve.json
+      TS_USERSPACE: ${TS_USERSPACE:-false}
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./tailscale-serve.json:/config/tailscale-serve.json:ro
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "${NOVNC_PORT:-6080}:6080"
+    restart: unless-stopped
+
+  openclaw-gateway:
+    network_mode: "service:tailscale"
+    # Clear upstream ports — network_mode delegates publishing to tailscale
+    ports: !reset []
+    depends_on:
+      - tailscale
+    environment:
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+    volumes:
+      - op-config:/home/node/.config/op
+      - gws-config:/home/node/.config/gws
+      - chrome-downloads:/tmp/openclaw/downloads
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "--port",
+        "18789",
+        "--tailscale",
+        "off",
+      ]
+
+  chrome:
+    build: ./chrome
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+    environment:
+      HEADLESS: ${CHROME_HEADLESS:-true}
+    volumes:
+      - chrome-data:/home/chrome/data
+      - chrome-downloads:/tmp/openclaw/downloads
+    shm_size: "512m"
+    init: true
+    restart: unless-stopped
+
+  openclaw-cli:
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+      - openclaw-gateway
+    environment:
+      OPENCLAW_CLI_BIND: loopback
+
+volumes:
+  ts-state:
+  op-config:
+  gws-config:
+  chrome-downloads:
+  chrome-data:
