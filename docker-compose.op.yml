@@ -1,0 +1,16 @@
+
+# Optional 1Password service-account overlay for ClawDock.
+#
+# Use through clawdock-op-* helpers, or include this file manually after
+# docker-compose.extra.yml. OP_SERVICE_ACCOUNT_TOKEN must be the raw service
+# account token; op:// references are values read by an already-authenticated
+# 1Password CLI and cannot authenticate the CLI itself.
+
+services:
+  openclaw-gateway:
+    environment:
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:?OP_SERVICE_ACCOUNT_TOKEN must be the raw 1Password service-account token}
+
+  openclaw-cli:
+    environment:
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:?OP_SERVICE_ACCOUNT_TOKEN must be the raw 1Password service-account token}

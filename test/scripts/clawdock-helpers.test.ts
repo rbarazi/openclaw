@@ -21,6 +21,31 @@ async function writeExecutable(file: string, content: string) {
   await writeFile(file, content, { mode: 0o755 });
 }
 
+async function createComposeSandbox(prefix = "openclaw-clawdock-") {
+  const tempDir = await mkdtemp(path.join(tmpdir(), prefix));
+  const projectDir = path.join(tempDir, "project");
+  const binDir = path.join(tempDir, "bin");
+  await mkdir(projectDir);
+  await mkdir(binDir);
+  await writeFile(path.join(projectDir, "docker-compose.yml"), "services: {}\n");
+  return { tempDir, projectDir, binDir };
+}
+
+function helperEnv(params: {
+  projectDir: string;
+  binDir: string;
+  homeDir: string;
+  extra?: Record<string, string>;
+}) {
+  return {
+    ...process.env,
+    CLAWDOCK_DIR: params.projectDir,
+    HOME: params.homeDir,
+    PATH: `${params.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    ...params.extra,
+  };
+}
+
 describe("scripts/clawdock/clawdock-helpers.sh", () => {
   for (const { available, shell } of shellCases) {
     it.runIf(available)(
@@ -73,14 +98,9 @@ describe("scripts/clawdock/clawdock-helpers.sh", () => {
   }
 
   it("loads the standard docker-compose.override.yml before ClawDock extra overrides", async () => {
-    const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-clawdock-"));
+    const { tempDir, projectDir, binDir } = await createComposeSandbox();
     try {
-      const projectDir = path.join(tempDir, "project");
-      const binDir = path.join(tempDir, "bin");
       const argsFile = path.join(tempDir, "docker-args.txt");
-      await mkdir(projectDir);
-      await mkdir(binDir);
-      await writeFile(path.join(projectDir, "docker-compose.yml"), "services: {}\n");
       await writeFile(path.join(projectDir, "docker-compose.override.yml"), "services: {}\n");
       await writeFile(path.join(projectDir, "docker-compose.extra.yml"), "services: {}\n");
       await writeExecutable(
@@ -95,13 +115,12 @@ printf '%s\\n' "$@" > "$CLAWDOCK_DOCKER_ARGS_FILE"
         ["-c", "source scripts/clawdock/clawdock-helpers.sh; _clawdock_compose config"],
         {
           cwd: repoRoot,
-          env: {
-            ...process.env,
-            CLAWDOCK_DIR: projectDir,
-            CLAWDOCK_DOCKER_ARGS_FILE: argsFile,
-            HOME: path.join(tempDir, "home"),
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-          },
+          env: helperEnv({
+            projectDir,
+            binDir,
+            homeDir: path.join(tempDir, "home"),
+            extra: { CLAWDOCK_DOCKER_ARGS_FILE: argsFile },
+          }),
         },
       );
 
@@ -124,15 +143,10 @@ printf '%s\\n' "$@" > "$CLAWDOCK_DOCKER_ARGS_FILE"
   });
 
   it("opens dashboard URLs through the published gateway port without starting dependencies", async () => {
-    const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-clawdock-"));
+    const { tempDir, projectDir, binDir } = await createComposeSandbox();
     try {
-      const projectDir = path.join(tempDir, "project");
-      const binDir = path.join(tempDir, "bin");
       const argsFile = path.join(tempDir, "docker-args.txt");
       const openedUrlFile = path.join(tempDir, "opened-url.txt");
-      await mkdir(projectDir);
-      await mkdir(binDir);
-      await writeFile(path.join(projectDir, "docker-compose.yml"), "services: {}\n");
       await writeExecutable(
         path.join(binDir, "docker"),
         `#!/usr/bin/env bash
@@ -157,14 +171,15 @@ printf '%s\\n' "$1" > "$CLAWDOCK_OPENED_URL_FILE"
         ["-c", "source scripts/clawdock/clawdock-helpers.sh; clawdock-dashboard"],
         {
           cwd: repoRoot,
-          env: {
-            ...process.env,
-            CLAWDOCK_DIR: projectDir,
-            CLAWDOCK_DOCKER_ARGS_FILE: argsFile,
-            CLAWDOCK_OPENED_URL_FILE: openedUrlFile,
-            HOME: path.join(tempDir, "home"),
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-          },
+          env: helperEnv({
+            projectDir,
+            binDir,
+            homeDir: path.join(tempDir, "home"),
+            extra: {
+              CLAWDOCK_DOCKER_ARGS_FILE: argsFile,
+              CLAWDOCK_OPENED_URL_FILE: openedUrlFile,
+            },
+          }),
         },
       );
 
@@ -193,6 +208,93 @@ printf '%s\\n' "$1" > "$CLAWDOCK_OPENED_URL_FILE"
           "",
         ].join("\n"),
       );
+    } finally {
+      await rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects op:// references for OP_SERVICE_ACCOUNT_TOKEN before Compose runs", async () => {
+    const { tempDir, projectDir, binDir } = await createComposeSandbox();
+    try {
+      const logFile = path.join(tempDir, "docker.log");
+      await writeFile(path.join(projectDir, "docker-compose.override.yml"), "services: {}\n");
+      await writeFile(path.join(projectDir, "docker-compose.extra.yml"), "services: {}\n");
+      await writeFile(path.join(projectDir, "docker-compose.op.yml"), "services: {}\n");
+      await writeExecutable(
+        path.join(binDir, "docker"),
+        `#!/usr/bin/env bash
+printf 'docker-called\\n' > "${logFile}"
+`,
+      );
+
+      const result = await execFileAsync(
+        "bash",
+        ["-c", "source scripts/clawdock/clawdock-helpers.sh; clawdock-op-restart"],
+        {
+          cwd: repoRoot,
+          env: helperEnv({
+            projectDir,
+            binDir,
+            homeDir: path.join(tempDir, "home"),
+            extra: { OP_SERVICE_ACCOUNT_TOKEN: "op://Vault/Item/credential" },
+          }),
+        },
+      ).then(
+        (value) => ({ status: 0, ...value }),
+        (error: { code?: number; stdout?: string; stderr?: string }) => ({
+          status: error.code ?? 1,
+          stdout: error.stdout ?? "",
+          stderr: error.stderr ?? "",
+        }),
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain("must be the raw 1Password service account token");
+      expect(result.stdout).toContain("op:// reference");
+      expect(result.stdout).not.toContain("op://Vault/Item/credential");
+      expect(result.stderr).toBe("");
+      await expect(readFile(logFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the OP Compose overlay and recreates the gateway so env changes apply", async () => {
+    const { tempDir, projectDir, binDir } = await createComposeSandbox();
+    try {
+      const logFile = path.join(tempDir, "docker.log");
+      await writeFile(path.join(projectDir, "docker-compose.extra.yml"), "services: {}\n");
+      await writeFile(path.join(projectDir, "docker-compose.op.yml"), "services: {}\n");
+      await writeExecutable(
+        path.join(binDir, "docker"),
+        `#!/usr/bin/env bash
+printf 'OP=%s\\n' "\${OP_SERVICE_ACCOUNT_TOKEN:-}" >> "${logFile}"
+printf '%q ' "$@" >> "${logFile}"
+printf '\\n' >> "${logFile}"
+`,
+      );
+
+      await execFileAsync(
+        "bash",
+        ["-c", "source scripts/clawdock/clawdock-helpers.sh; clawdock-op-restart"],
+        {
+          cwd: repoRoot,
+          env: helperEnv({
+            projectDir,
+            binDir,
+            homeDir: path.join(tempDir, "home"),
+            extra: { OP_SERVICE_ACCOUNT_TOKEN: "raw-service-account-token" },
+          }),
+        },
+      );
+
+      const log = await readFile(logFile, "utf8");
+      expect(log).toContain("OP=raw-service-account-token");
+      expect(log).toContain("-f");
+      expect(log).toContain("docker-compose.override.yml");
+      expect(log).toContain("docker-compose.extra.yml");
+      expect(log).toContain("docker-compose.op.yml");
+      expect(log).toContain("up -d --force-recreate openclaw-gateway");
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }

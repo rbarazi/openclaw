@@ -63,7 +63,23 @@ _clawdock_trim_quotes() {
   local value="$1"
   value="${value#\"}"
   value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
   printf "%s" "$value"
+}
+
+_clawdock_describe_op_value() {
+  local value="${1-}"
+  local length=${#value}
+  if (( length == 0 )); then
+    printf "%s" "empty"
+    return 0
+  fi
+  if [[ "$value" == op://* ]]; then
+    printf "op:// reference (length %s)" "$length"
+    return 0
+  fi
+  printf "present non-reference (length %s)" "$length"
 }
 
 _clawdock_mask_value() {
@@ -202,14 +218,25 @@ _clawdock_require_op() {
     echo "   Export it first, then rerun the command."
     return 1
   fi
+  if [[ "${OP_SERVICE_ACCOUNT_TOKEN}" == op://* ]]; then
+    echo "❌ Error: OP_SERVICE_ACCOUNT_TOKEN must be the raw 1Password service account token."
+    echo "   Got an op:// reference. The 1Password CLI cannot use a vault reference as its own service-account token."
+    return 1
+  fi
 }
 
 _clawdock_compose_with_op() {
   _clawdock_require_op || return 1
   _clawdock_ensure_dir || return 1
   local compose_args=(-f "${CLAWDOCK_DIR}/docker-compose.yml")
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.override.yml" ]]; then
+    compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.override.yml")
+  fi
   if [[ -f "${CLAWDOCK_DIR}/docker-compose.extra.yml" ]]; then
     compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.extra.yml")
+  fi
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.op.yml" ]]; then
+    compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.op.yml")
   fi
   OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN}" command docker compose "${compose_args[@]}" "$@"
 }
@@ -227,6 +254,23 @@ _clawdock_read_env_token() {
   _clawdock_trim_quotes "$raw"
 }
 
+_clawdock_read_project_env_value() {
+  local key="$1"
+  _clawdock_ensure_dir || return 1
+  if [[ ! -f "${CLAWDOCK_DIR}/.env" ]]; then
+    return 1
+  fi
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if [[ "$line" == "$key="* ]]; then
+      _clawdock_trim_quotes "${line#*=}"
+      return 0
+    fi
+  done < "${CLAWDOCK_DIR}/.env"
+  return 1
+}
+
 # Basic Operations
 clawdock-start() {
   _clawdock_compose up -d openclaw-gateway
@@ -241,7 +285,13 @@ clawdock-restart() {
 }
 
 clawdock-op-restart() {
-  _clawdock_compose_with_op restart openclaw-gateway
+  _clawdock_compose_with_op up -d --force-recreate openclaw-gateway
+}
+
+clawdock-op-repair() {
+  _clawdock_compose_with_op rm -sf openclaw-gateway
+  _clawdock_compose_with_op up -d --force-recreate openclaw-gateway chrome
+  clawdock-op-diagnose
 }
 
 clawdock-logs() {
@@ -338,6 +388,108 @@ clawdock-op-cli() {
 
 clawdock-op-config() {
   clawdock-op-cli config "$@"
+}
+
+clawdock-op-diagnose() {
+  _clawdock_ensure_dir || return 1
+
+  echo -e "${_CLR_BOLD}1Password / browser Docker diagnostics${_CLR_RESET}"
+  echo -e "Project: ${_CLR_CYAN}${CLAWDOCK_DIR}${_CLR_RESET}"
+  echo ""
+
+  echo -e "${_CLR_BOLD}Compose files${_CLR_RESET}"
+  echo "  docker-compose.yml"
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.extra.yml" ]]; then
+    echo "  docker-compose.extra.yml"
+  else
+    echo "  docker-compose.extra.yml: missing"
+  fi
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.op.yml" ]]; then
+    echo "  docker-compose.op.yml"
+  else
+    echo "  docker-compose.op.yml: missing"
+  fi
+  echo ""
+
+  echo -e "${_CLR_BOLD}Host/project token inputs${_CLR_RESET}"
+  echo "  shell OP_SERVICE_ACCOUNT_TOKEN: $(_clawdock_describe_op_value "${OP_SERVICE_ACCOUNT_TOKEN:-}")"
+  local project_op=""
+  if project_op=$(_clawdock_read_project_env_value OP_SERVICE_ACCOUNT_TOKEN); then
+    echo "  project .env OP_SERVICE_ACCOUNT_TOKEN: $(_clawdock_describe_op_value "$project_op")"
+  else
+    echo "  project .env OP_SERVICE_ACCOUNT_TOKEN: absent"
+  fi
+  echo ""
+
+  local compose_args=(-f "${CLAWDOCK_DIR}/docker-compose.yml")
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.extra.yml" ]]; then
+    compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.extra.yml")
+  fi
+
+  local gateway_id=""
+  gateway_id=$(command docker compose "${compose_args[@]}" ps -q openclaw-gateway 2>/dev/null | head -n 1)
+  if [[ -z "$gateway_id" ]]; then
+    echo -e "${_CLR_BOLD}Running gateway container${_CLR_RESET}"
+    echo "  openclaw-gateway: not running for these Compose files"
+    return 0
+  fi
+
+  echo -e "${_CLR_BOLD}Running gateway container${_CLR_RESET}"
+  local image_name=""
+  local image_id=""
+  image_name=$(command docker inspect "$gateway_id" --format '{{.Config.Image}}' 2>/dev/null || true)
+  image_id=$(command docker inspect "$gateway_id" --format '{{.Image}}' 2>/dev/null || true)
+  echo "  container id: ${gateway_id}"
+  echo "  image name: ${image_name:-unknown}"
+  echo "  image id: ${image_id:-unknown}"
+
+  local runtime_op_line=""
+  runtime_op_line=$(
+    command docker inspect "$gateway_id" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
+      awk -F= '$1 == "OP_SERVICE_ACCOUNT_TOKEN" { print; exit }'
+  )
+  if [[ -n "$runtime_op_line" ]]; then
+    echo "  inspect OP_SERVICE_ACCOUNT_TOKEN: $(_clawdock_describe_op_value "${runtime_op_line#*=}")"
+  else
+    echo "  inspect OP_SERVICE_ACCOUNT_TOKEN: absent"
+  fi
+
+  local chrome_id=""
+  chrome_id=$(command docker compose "${compose_args[@]}" ps -q chrome 2>/dev/null | head -n 1)
+  if [[ -n "$chrome_id" ]]; then
+    echo "  chrome sidecar: running (${chrome_id})"
+  else
+    echo "  chrome sidecar: not running for these Compose files"
+  fi
+  echo ""
+
+  echo -e "${_CLR_BOLD}Inside gateway process namespace${_CLR_RESET}"
+  command docker compose "${compose_args[@]}" exec -T openclaw-gateway sh -lc '
+if command -v op >/dev/null 2>&1; then
+  echo "  op CLI: present"
+  if op whoami >/dev/null 2>&1; then
+    echo "  op whoami: ok"
+  else
+    echo "  op whoami: failed"
+  fi
+else
+  echo "  op CLI: missing"
+fi
+
+if [ "${OP_SERVICE_ACCOUNT_TOKEN+x}" != x ]; then
+  echo "  runtime OP_SERVICE_ACCOUNT_TOKEN: absent"
+elif [ -z "$OP_SERVICE_ACCOUNT_TOKEN" ]; then
+  echo "  runtime OP_SERVICE_ACCOUNT_TOKEN: empty"
+else
+  case "$OP_SERVICE_ACCOUNT_TOKEN" in
+    op://*) echo "  runtime OP_SERVICE_ACCOUNT_TOKEN: op:// reference (length ${#OP_SERVICE_ACCOUNT_TOKEN})" ;;
+    *) echo "  runtime OP_SERVICE_ACCOUNT_TOKEN: present non-reference (length ${#OP_SERVICE_ACCOUNT_TOKEN})" ;;
+  esac
+fi
+
+echo "  OPENCLAW_BROWSER_CDP_URL: ${OPENCLAW_BROWSER_CDP_URL:-<empty>}"
+echo "  OPENCLAW_BROWSER_ATTACH_ONLY: ${OPENCLAW_BROWSER_ATTACH_ONLY:-<empty>}"
+' 2>&1 | _clawdock_filter_warnings
 }
 
 # Maintenance
@@ -631,9 +783,11 @@ clawdock-help() {
   echo -e "  $(_cmd clawdock-start)       ${_CLR_DIM}Start the gateway${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-stop)        ${_CLR_DIM}Stop the gateway${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-restart)     ${_CLR_DIM}Restart the gateway${_CLR_RESET}"
-  echo -e "  $(_cmd clawdock-op-restart)  ${_CLR_DIM}Restart with OP_SERVICE_ACCOUNT_TOKEN${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-restart)  ${_CLR_DIM}Recreate gateway with OP_SERVICE_ACCOUNT_TOKEN${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-repair)   ${_CLR_DIM}Remove stale gateway container, recreate, and diagnose${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-status)      ${_CLR_DIM}Check container status${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-logs)        ${_CLR_DIM}View live logs (follows)${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-op-diagnose) ${_CLR_DIM}Inspect OP/browser Docker state without printing secrets${_CLR_RESET}"
   echo ""
 
   echo -e "${_CLR_BOLD}${_CLR_MAGENTA}🐚 Container Access${_CLR_RESET}"

@@ -8,6 +8,8 @@ import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,
+  OPENCLAW_BROWSER_ATTACH_ONLY_ENV,
+  OPENCLAW_BROWSER_CDP_URL_ENV,
   resolveBrowserConfig,
   resolveManagedBrowserHeadlessMode,
   resolveProfile,
@@ -153,6 +155,43 @@ describe("browser config", () => {
     expect(chrome?.cdpUrl).toBe(
       `http://openclaw:${token}@127.0.0.1:${resolved.extensionRelayDefaultPort}`,
     );
+  });
+
+  it("uses Docker browser sidecar env defaults when config omits CDP settings", () => {
+    const resolved = resolveBrowserConfig(undefined, undefined, {
+      env: {
+        [OPENCLAW_BROWSER_CDP_URL_ENV]: "http://127.0.0.1:9222",
+        [OPENCLAW_BROWSER_ATTACH_ONLY_ENV]: "1",
+      },
+    });
+    const profile = resolveProfile(resolved, "openclaw");
+
+    expect(resolved.attachOnly).toBe(true);
+    expect(profile?.cdpPort).toBe(9222);
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(profile?.attachOnly).toBe(true);
+  });
+
+  it("lets browser config override Docker browser sidecar env defaults", () => {
+    const resolved = resolveBrowserConfig(
+      {
+        cdpUrl: "http://127.0.0.1:9333",
+        attachOnly: false,
+      },
+      undefined,
+      {
+        env: {
+          [OPENCLAW_BROWSER_CDP_URL_ENV]: "http://127.0.0.1:9222",
+          [OPENCLAW_BROWSER_ATTACH_ONLY_ENV]: "1",
+        },
+      },
+    );
+    const profile = resolveProfile(resolved, "openclaw");
+
+    expect(resolved.attachOnly).toBe(false);
+    expect(profile?.cdpPort).toBe(9333);
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9333");
+    expect(profile?.attachOnly).toBe(false);
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {

@@ -8,6 +8,11 @@ import { describe, expect, it } from "vitest";
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
+const dockerComposePath = join(repoRoot, "docker-compose.yml");
+const dockerComposeExtraPath = join(repoRoot, "docker-compose.extra.yml");
+const dockerComposeOpPath = join(repoRoot, "docker-compose.op.yml");
+const dockerfileExtraPath = join(repoRoot, "Dockerfile.extra");
+const dockerEntrypointPath = join(repoRoot, "entrypoint.sh");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const fullReleaseValidationWorkflowPath = join(
   repoRoot,
@@ -94,6 +99,37 @@ describe("Dockerfile", () => {
       "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
     );
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
+  });
+
+  it("keeps 1Password service-account injection in the explicit Docker overlay", async () => {
+    const [baseCompose, extraCompose, opCompose, dockerfileExtra, entrypoint] = await Promise.all([
+      readFile(dockerComposePath, "utf8"),
+      readFile(dockerComposeExtraPath, "utf8"),
+      readFile(dockerComposeOpPath, "utf8"),
+      readFile(dockerfileExtraPath, "utf8"),
+      readFile(dockerEntrypointPath, "utf8"),
+    ]);
+
+    expect(baseCompose).toContain('OP_SERVICE_ACCOUNT_TOKEN: ""');
+    expect(extraCompose).not.toContain("OP_SERVICE_ACCOUNT_TOKEN");
+    expect(opCompose).toContain("OP_SERVICE_ACCOUNT_TOKEN:");
+    expect(opCompose).toContain("raw 1Password service-account token");
+    expect(dockerfileExtra).toContain("ENTRYPOINT [\"entrypoint.sh\"]");
+    expect(entrypoint).toContain(
+      "OP_SERVICE_ACCOUNT_TOKEN must be the raw 1Password service-account token",
+    );
+  });
+
+  it("wires the Docker browser sidecar through browser env defaults", async () => {
+    const extraCompose = await readFile(dockerComposeExtraPath, "utf8");
+
+    expect(extraCompose).toContain(
+      "OPENCLAW_BROWSER_CDP_URL: ${OPENCLAW_BROWSER_CDP_URL:-http://127.0.0.1:9222}",
+    );
+    expect(extraCompose).toContain(
+      "OPENCLAW_BROWSER_ATTACH_ONLY: ${OPENCLAW_BROWSER_ATTACH_ONLY:-1}",
+    );
+    expect(extraCompose).toContain("build: ./chrome");
   });
 
   it("uses the Docker target platform for pnpm install and prune", async () => {

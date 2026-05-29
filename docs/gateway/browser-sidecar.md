@@ -133,7 +133,7 @@ Key flags:
 Font packages (`fonts-liberation`, `fonts-noto-color-emoji`, `fonts-noto-cjk`)
 ensure pages render text correctly instead of showing blank rectangles.
 
-### 2. Add the Chrome service to `docker-compose.yml`
+### 2. Add the Chrome service to `docker-compose.extra.yml`
 
 ```yaml
 chrome:
@@ -157,7 +157,18 @@ volumes:
   chrome-data:
 ```
 
-### 3. Add browser config to `openclaw.json`
+### 3. Point the gateway at the sidecar
+
+ClawDock's `docker-compose.extra.yml` sets these gateway environment defaults
+for you:
+
+```yaml
+OPENCLAW_BROWSER_CDP_URL: http://127.0.0.1:9222
+OPENCLAW_BROWSER_ATTACH_ONLY: 1
+```
+
+For manual Compose stacks, set the same values in the gateway service
+environment or add the equivalent config:
 
 ```json
 {
@@ -191,12 +202,15 @@ Browser control service ready (profiles=2)
 | `browser.headless` | boolean | `false` | Not needed — the sidecar handles its own headless flag |
 | `browser.noSandbox` | boolean | `false` | Not needed — the sidecar handles its own sandbox flag |
 
+Environment defaults are lower precedence than `openclaw.json`; explicit
+`browser.cdpUrl` or `browser.attachOnly` config still wins.
+
 ## Files
 
 | File | Purpose |
 |---|---|
 | `chrome/Dockerfile` | Builds the full-Chromium sidecar image |
-| `docker-compose.yml` | Defines the `chrome` service and `chrome-data` volume |
+| `docker-compose.extra.yml` | Defines the `chrome` service, sidecar browser env defaults, and `chrome-data` volume |
 | `openclaw.json` | `browser.cdpUrl` + `browser.attachOnly` config |
 
 ## Data Persistence
@@ -268,7 +282,7 @@ Docker's default shared memory (`/dev/shm`) is 64 MB, which is too small for
 Chrome rendering complex pages.
 
 **Fix:** Set `shm_size: "512m"` (or higher) on the `chrome` service in
-`docker-compose.yml`. This is already included in the setup above.
+`docker-compose.extra.yml`. This is already included in the setup above.
 
 ### 3. Gateway still tries to launch Chrome locally
 

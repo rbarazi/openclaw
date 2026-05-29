@@ -139,6 +139,8 @@ const EXTENSION_RELAY_PORT_OFFSET = 8;
 /** Username half of the relay's Basic credential; the password is the derived token. */
 const EXTENSION_RELAY_CDP_USER = "openclaw";
 const MAX_BROWSER_STARTUP_TIMEOUT_MS = 120_000;
+export const OPENCLAW_BROWSER_CDP_URL_ENV = "OPENCLAW_BROWSER_CDP_URL";
+export const OPENCLAW_BROWSER_ATTACH_ONLY_ENV = "OPENCLAW_BROWSER_ATTACH_ONLY";
 /** Environment variable that overrides managed Chrome headless mode. */
 const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
 
@@ -166,6 +168,10 @@ export type ManagedBrowserHeadlessOptions = {
   headlessOverride?: boolean;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+};
+
+export type ResolveBrowserConfigOptions = {
+  env?: NodeJS.ProcessEnv;
 };
 
 function normalizeHexColor(raw: string | undefined): string {
@@ -439,7 +445,9 @@ function applyLegacyCdpUrlToExistingSessionDefaultProfile(
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
+  options: ResolveBrowserConfigOptions = {},
 ): ResolvedBrowserConfig {
+  const env = options.env ?? process.env;
   const enabled = cfg?.enabled ?? DEFAULT_OPENCLAW_BROWSER_ENABLED;
   const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
@@ -472,7 +480,10 @@ export function resolveBrowserConfig(
   );
   const cdpPortRangeEnd = cdpPortRangeStart + cdpRangeSpan;
 
-  const rawCdpUrl = (cfg?.cdpUrl ?? "").trim();
+  const rawCdpUrl =
+    normalizeOptionalString(cfg?.cdpUrl) ??
+    normalizeOptionalString(env[OPENCLAW_BROWSER_CDP_URL_ENV]) ??
+    "";
   let cdpInfo:
     | {
         parsed: URL;
@@ -503,7 +514,8 @@ export function resolveBrowserConfig(
   // here just means the extension driver has not been used on this host yet.
   const extensionRelayToken = resolveExtensionRelayToken() ?? undefined;
   const noSandbox = cfg?.noSandbox === true;
-  const attachOnly = cfg?.attachOnly === true;
+  const envAttachOnly = parseBooleanValue(env[OPENCLAW_BROWSER_ATTACH_ONLY_ENV]);
+  const attachOnly = cfg?.attachOnly ?? (envAttachOnly === true);
   const executablePath = normalizeExecutablePath(cfg?.executablePath);
   const defaultProfileFromConfig = normalizeOptionalString(cfg?.defaultProfile);
 

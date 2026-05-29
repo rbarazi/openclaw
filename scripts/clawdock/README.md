@@ -90,8 +90,11 @@ clawdock-approve <request-id>
 | `clawdock-start`   | Start the gateway               |
 | `clawdock-stop`    | Stop the gateway                |
 | `clawdock-restart` | Restart the gateway             |
+| `clawdock-op-restart` | Recreate the gateway with `OP_SERVICE_ACCOUNT_TOKEN` |
+| `clawdock-op-repair` | Remove a stale gateway container, recreate it, and diagnose |
 | `clawdock-status`  | Check container status          |
 | `clawdock-logs`    | View live logs (follows output) |
+| `clawdock-op-diagnose` | Inspect OP/browser Docker state without printing secrets |
 
 ### Container Access
 
@@ -260,6 +263,8 @@ export OP_SERVICE_ACCOUNT_TOKEN=...
 clawdock-op-update
 ```
 
+`OP_SERVICE_ACCOUNT_TOKEN` must be the raw 1Password service-account token. Do not set it to an `op://...` item reference; the 1Password CLI can only read those references after it is already authenticated with the raw service-account token. The default Compose file blanks this variable so stale project `.env` references do not leak into the runtime; `clawdock-op-*` commands add the explicit OP overlay.
+
 This will:
 
 1. Fetch upstream `main` and fast-forward your fork
@@ -274,6 +279,10 @@ For partial updates:
 clawdock-rebuild-all        # Rebuild images only
 clawdock-op-recreate-all    # Recreate containers only (with OP token)
 ```
+
+`clawdock-op-restart`, `clawdock-op-recreate`, and `clawdock-op-recreate-all` recreate containers instead of using `docker compose restart` so Docker applies the current environment to the new process.
+
+The chrome sidecar is wired into the gateway by default through `OPENCLAW_BROWSER_CDP_URL=http://127.0.0.1:9222` and `OPENCLAW_BROWSER_ATTACH_ONLY=1` in `docker-compose.extra.yml`. Override those values only if you run a different browser-capable node or remote CDP endpoint.
 
 ### Update OpenClaw
 

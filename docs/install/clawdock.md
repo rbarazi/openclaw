@@ -32,8 +32,11 @@ The helpers auto-detect your OpenClaw checkout on first use (checking common pat
 | `clawdock-start`   | Start the gateway      |
 | `clawdock-stop`    | Stop the gateway       |
 | `clawdock-restart` | Restart the gateway    |
+| `clawdock-op-restart` | Recreate the gateway with `OP_SERVICE_ACCOUNT_TOKEN` |
+| `clawdock-op-repair` | Remove a stale gateway container, recreate it, and diagnose |
 | `clawdock-status`  | Check container status |
 | `clawdock-logs`    | Follow gateway logs    |
+| `clawdock-op-diagnose` | Inspect OP/browser Docker state without printing secrets |
 
 ### Container access
 
@@ -53,12 +56,14 @@ The helpers auto-detect your OpenClaw checkout on first use (checking common pat
 
 ### Setup and maintenance
 
-| Command              | Description                                       |
-| -------------------- | ------------------------------------------------- |
-| `clawdock-fix-token` | Write the gateway token into the container config |
-| `clawdock-update`    | Pull, rebuild, and restart                        |
-| `clawdock-rebuild`   | Rebuild the Docker image only                     |
-| `clawdock-clean`     | Remove containers and volumes                     |
+| Command                    | Description                                                        |
+| -------------------------- | ------------------------------------------------------------------ |
+| `clawdock-fix-token`       | Write the gateway token into the container config                  |
+| `clawdock-op-update`       | Pull, rebuild, and recreate with 1Password auth                    |
+| `clawdock-op-recreate-all` | Recreate the gateway and browser sidecar with 1Password auth       |
+| `clawdock-update`          | Pull, rebuild, and restart                                         |
+| `clawdock-rebuild`         | Rebuild the Docker image only                                      |
+| `clawdock-clean`           | Remove containers and volumes                                      |
 
 ### Utilities
 
@@ -97,6 +102,19 @@ ClawDock reads two separate `.env` files, matching the split described in [Docke
 `clawdock-fix-token` copies the token from the project `.env` into the container's `gateway.remote.token` and `gateway.auth.token` config values and restarts the gateway.
 
 Use `clawdock-show-config` to inspect `openclaw.json` and both `.env` files quickly; it redacts `.env` values in its printed output.
+
+## 1Password and browser sidecar
+
+Use a raw 1Password service-account token with the OP helpers:
+
+```bash
+export OP_SERVICE_ACCOUNT_TOKEN=<service-account-token>
+clawdock-op-recreate-all
+```
+
+Do not set `OP_SERVICE_ACCOUNT_TOKEN` to an `op://...` reference. The 1Password CLI can read item references only after it is already authenticated with the raw service-account token. The default Compose file blanks this variable so a stale project `.env` reference is not inherited accidentally; the OP overlay injects it only for `clawdock-op-*` commands.
+
+The ClawDock extra Compose file starts the Chrome sidecar and points the gateway at it with `OPENCLAW_BROWSER_CDP_URL=http://127.0.0.1:9222` and `OPENCLAW_BROWSER_ATTACH_ONLY=1`. Recreate the gateway after changing those environment values; a plain process restart does not update Docker container environment.
 
 ## Related
 

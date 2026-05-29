@@ -41,10 +41,13 @@ services:
     network_mode: "service:tailscale"
     # Clear upstream ports — network_mode delegates publishing to tailscale
     ports: !reset []
+    # network_mode cannot be combined with custom host mappings.
+    extra_hosts: !reset []
     depends_on:
       - tailscale
     environment:
-      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      OPENCLAW_BROWSER_CDP_URL: ${OPENCLAW_BROWSER_CDP_URL:-http://127.0.0.1:9222}
+      OPENCLAW_BROWSER_ATTACH_ONLY: ${OPENCLAW_BROWSER_ATTACH_ONLY:-1}
     volumes:
       - op-config:/home/node/.config/op
       - gws-config:/home/node/.config/gws

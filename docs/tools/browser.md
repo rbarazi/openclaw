@@ -336,6 +336,9 @@ main model can read the screenshot directly.
 - Headless managed Chrome still uses the conservative `--disable-gpu` default.
   The diagnostics do not enable acceleration, add a global acceleration setting,
   or grant sandbox browser device access.
+- `OPENCLAW_BROWSER_CDP_URL` and `OPENCLAW_BROWSER_ATTACH_ONLY` provide
+  process-level defaults for container sidecars or remote CDP endpoints. Values
+  in `openclaw.json` still take precedence.
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
